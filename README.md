@@ -2,7 +2,7 @@
 ![아키텍처 다이어그램](images/흐름도.png)
 
 # Gitea + Jenkins (Vagrant)
-- 사설 Git 서버(Gitea)와 CI 서버(Jenkins)로 CI/CD 실습 환경 구축
+- 사설 Git 서버(Gitea)와 Jenkins로 CI/CD 실습 환경 구축
 - 샘플 게시판 폼 구현
 - Nginx web tier, PHP/Apache app tier, MariaDB, Jenkins, Gitea
 - IaC: Vagrant
