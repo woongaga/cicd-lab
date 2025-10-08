@@ -54,7 +54,7 @@ rm -rf .vagrant jenkins_initial_admin_password.txt
     - MariaDB: 내부 네트워크(corpnet) 전용
 
 # 검증
-자세한 사용법은 👉 [노션 가이드](https://www.notion.so/Gitea-Jenkins-28683b9724278019a536d848f924f60a?source=copy_link)를 참고하세요.
+자세한 사용법은 👉 [노션 가이드](https://chlorinated-zinc-7d0.notion.site/Gitea-Jenkins-28683b9724278019a536d848f924f60a?source=copy_link)를 참고하세요.
 
 # 유의할 점
 - Host PC의 RAM: ≥ 2 GB 권장 (VM 1대 × 2GB)
