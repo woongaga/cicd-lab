@@ -171,28 +171,102 @@ PHP
 cat <<'JENK' >/home/vagrant/cicd/Jenkinsfile
 pipeline {
   agent any
+  options { disableConcurrentBuilds(); timestamps() }
+
   environment {
-    NETWORK   = 'corpnet'
-    WEB_IMAGE = 'test-nginx:latest'
-    WAS_IMAGE = 'test-php:latest'
-    DB_HOST   = 'db'
-    DB_NAME   = 'test'
-    DB_USER   = 'testuser'
-    DB_PASS   = 'testpw'
+    NETWORK         = 'corpnet'
+    WEB_IMAGE_NAME  = 'test-nginx'
+    WAS_IMAGE_NAME  = 'test-php'
+    DB_HOST         = 'db'
+    DB_NAME         = 'test'
+    DB_USER         = 'testuser'
+    DB_PASS         = 'testpw'
+    APP_PORT        = '18080'
   }
+
   stages {
-    stage('Build images') {
-      steps { sh "docker build -t $WEB_IMAGE ./web && docker build -t $WAS_IMAGE ./was" }
+    stage('Detect Changes') {
+      steps {
+        script {
+          // 현재/직전 커밋 태그 계산 (최초 실행 대비 기본값 처리)
+          env.TAG      = (env.GIT_COMMIT ? env.GIT_COMMIT.take(7) : "dev-${env.BUILD_NUMBER}")
+          env.PREV_TAG = sh(script: 'git rev-parse --short=7 HEAD~1 2>/dev/null || true', returnStdout: true).trim()
+
+          // 변경된 최상위 디렉터리 집합 (없으면 전체 배포)
+          def changed = sh(script: 'git diff --name-only HEAD~1 HEAD 2>/dev/null | cut -d/ -f1 | sort -u', returnStdout: true).trim()
+          def set = (changed ? changed.split("\\s+") as Set : ['web','was'] as Set)
+
+          env.DO_BUILD_WEB = set.contains('web') ? '1' : '0'
+          env.DO_BUILD_WAS = set.contains('was') ? '1' : '0'
+
+          echo "TAG=${env.TAG}, PREV_TAG=${env.PREV_TAG}, CHANGED=${set}"
+        }
+      }
     }
+
+    stage('Build Web Image') {
+      when { environment name: 'DO_BUILD_WEB', value: '1' }
+      steps {
+        sh """
+          docker build -t ${WEB_IMAGE_NAME}:${TAG} ./web
+          docker tag ${WEB_IMAGE_NAME}:${TAG} ${WEB_IMAGE_NAME}:latest
+        """
+      }
+    }
+
+    stage('Build WAS Image') {
+      when { environment name: 'DO_BUILD_WAS', value: '1' }
+      steps {
+        sh """
+          docker build -t ${WAS_IMAGE_NAME}:${TAG} ./was
+          docker tag ${WAS_IMAGE_NAME}:${TAG} ${WAS_IMAGE_NAME}:latest
+        """
+      }
+    }
+
     stage('Deploy') {
       steps {
         sh """
-          docker network inspect $NETWORK >/dev/null 2>&1 || docker network create $NETWORK
-          docker rm -f web was >/dev/null 2>&1 || true
-          docker run -d --name was --network $NETWORK \
-            -e DB_HOST=$DB_HOST -e DB_NAME=$DB_NAME -e DB_USER=$DB_USER -e DB_PASS=$DB_PASS $WAS_IMAGE
-          docker run -d --name web --network $NETWORK -p 18080:80 $WEB_IMAGE
+          docker network inspect ${NETWORK} >/dev/null 2>&1 || docker network create ${NETWORK}
+
+          if [ "${DO_BUILD_WAS}" = "1" ]; then
+            docker rm -f was >/dev/null 2>&1 || true
+            docker run -d --name was --restart unless-stopped --network ${NETWORK} \\
+              -e DB_HOST=${DB_HOST} -e DB_NAME=${DB_NAME} -e DB_USER=${DB_USER} -e DB_PASS=${DB_PASS} \\
+              ${WAS_IMAGE_NAME}:${TAG}
+          fi
+
+          if [ "${DO_BUILD_WEB}" = "1" ]; then
+            docker rm -f web >/dev/null 2>&1 || true
+            docker run -d --name web --restart unless-stopped --network ${NETWORK} -p ${APP_PORT}:80 \\
+              ${WEB_IMAGE_NAME}:${TAG}
+          fi
         """
+      }
+    }
+  }
+
+  post {
+    failure {
+      script {
+        echo "Deploy failed. Try rollback to PREV_TAG=${env.PREV_TAG}"
+        if (env.PREV_TAG) {
+          sh """
+            if [ "${DO_BUILD_WEB}" = "1" ] && docker image inspect ${WEB_IMAGE_NAME}:${PREV_TAG} >/dev/null 2>&1; then
+              docker rm -f web >/dev/null 2>&1 || true
+              docker run -d --name web --restart unless-stopped --network ${NETWORK} -p ${APP_PORT}:80 \\
+                ${WEB_IMAGE_NAME}:${PREV_TAG}
+            fi
+            if [ "${DO_BUILD_WAS}" = "1" ] && docker image inspect ${WAS_IMAGE_NAME}:${PREV_TAG} >/dev/null 2>&1; then
+              docker rm -f was >/dev/null 2>&1 || true
+              docker run -d --name was --restart unless-stopped --network ${NETWORK} \\
+                -e DB_HOST=${DB_HOST} -e DB_NAME=${DB_NAME} -e DB_USER=${DB_USER} -e DB_PASS=${DB_PASS} \\
+                ${WAS_IMAGE_NAME}:${PREV_TAG}
+            fi
+          """
+        } else {
+          echo "No PREV_TAG available for rollback."
+        }
       }
     }
   }
